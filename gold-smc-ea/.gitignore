@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# build artefacts and runtime data
+*.ex5
+models/
+data/
+out/
+*.joblib
+*.log
