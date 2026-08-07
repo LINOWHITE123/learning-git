@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Chart Scanner</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>AI Chart Scanner</h1>
+      <p class="sub">Screenshot analysis only — no broker connection, no orders placed.</p>
+      <p id="provider" class="provider"></p>
+    </header>
+
+    <main>
+      <form id="scan-form">
+        <p class="step">Step 1 — Upload Chart Screenshot</p>
+        <label class="drop" id="drop">
+          <input id="files" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" multiple hidden />
+          <span class="drop-title">Drop screenshots here</span>
+          <span class="drop-hint">or click to choose — PNG, JPG, JPEG, WebP. Up to 3: H4, H1, M15.</span>
+        </label>
+        <div id="thumbs" class="thumbs"></div>
+
+        <details class="options">
+          <summary>Optional hints</summary>
+          <div class="fields">
+            <label>Symbol<input id="symbol" type="text" placeholder="read from the chart" /></label>
+            <label>Entry timeframe<input id="entry-tf" type="text" value="M15" /></label>
+            <label class="wide">Notes<input id="notes" type="text" placeholder="e.g. London session only" /></label>
+          </div>
+        </details>
+
+        <p class="step">Step 2</p>
+        <button id="scan" type="submit">SCAN CHART</button>
+      </form>
+
+      <ul id="progress" class="progress" hidden></ul>
+      <p id="error" class="error" hidden></p>
+      <section id="result" hidden></section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
