@@ -14,12 +14,20 @@ MQL5/Scripts/GoldSMC   ->  <data folder>/MQL5/Scripts/GoldSMC
 3. Restart MetaEditor, open `GoldSMC_EA.mq5`, press **F7**.
    Expected: `0 errors, 0 warnings`.
 4. In the terminal press **Ctrl+N** → *Expert Advisors* → drag **GoldSMC_EA**
-   onto an **XAUUSD M15** chart.
+   onto an **XAUUSD M5** chart — M5 is the execution timeframe; the EA reads
+   H4, H1 and M15 itself.
 5. On the *Common* tab tick **Allow Algo Trading**, and enable the global
    **Algo Trading** button in the toolbar.
 
-The dashboard in the top-left of the chart shows the current bias, live zone
-count, risk state and — importantly — the reason the EA is *not* trading.
+The dashboard in the top-left of the chart shows the trend, session, balance and
+equity, current risk % and profile, daily P/L against the target, open trades,
+win rate, drawdown, the armed M15 setup, the M5 event state and — importantly —
+the reason the EA is *not* trading.
+
+Notifications (`InpAlerts`, `InpPushNotifications`, `InpEmailNotifications`) are
+off by default. Push needs your MetaQuotes ID under *Tools → Options →
+Notifications*, email needs the *Email* tab configured. Both are suppressed in
+the strategy tester and logged to the journal instead.
 
 ## B. Connecting to your broker
 
@@ -110,9 +118,13 @@ python -m goldsmc_service.train \
 
 | Symptom | Cause |
 | --- | --- |
-| `no trade: higher timeframe has no clear bias` | H4 is ranging — expected, wait |
-| `no trade: alignment timeframe disagrees` | H1 against H4 — expected, wait |
-| `waiting: price is not at an area of interest` | normal for most bars |
-| `position size rejected (risk ceiling or margin)` | minimum lot exceeds your risk; raise `InpRiskPercent` or use a cent account |
+| `waiting: H4 has no clear trend` | H4 is ranging — expected, wait |
+| `waiting: H1 does not confirm H4` | expected, wait |
+| `waiting: price is not in H1 discount/premium` | price is on the wrong side of the range; `InpRequireDiscount` disables it |
+| `waiting: no unmitigated M15 zone near price` | normal for most bars |
+| `armed: waiting for the retrace into the zone` | the setup is stored; M5 has not come back yet |
+| `armed: in the zone, waiting for the M5 BOS/CHoCH` | working as designed — no entry without the trigger |
+| `position size rejected (risk ceiling or margin)` | minimum lot exceeds your risk; move up a risk profile or use a cent account |
+| `no trade: daily profit target reached` | `InpDailyProfitTarget` hit; resumes next trading day |
 | `Intel: unavailable (WebRequest failed...)` | URL not allowed in Options, or the service is not running |
-| No trades at all in the tester | check the model is *Every tick*, and that `InpUseSessionFilter` hours match your broker's server time |
+| No trades at all in the tester | check the period is **M5**, the model is *Every tick*, that H4/H1/M15 history is downloaded, and that `InpUseSessionFilter` hours match your broker's server time |

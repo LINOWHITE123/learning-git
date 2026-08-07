@@ -22,6 +22,12 @@ private:
    SwingPoint        m_lows[];
    datetime          m_last_build;
 
+   ENUM_STRUCT_EVENT m_last_event;      // most recent BOS / CHoCH
+   datetime          m_last_event_time; // when that break closed
+   double            m_last_event_price;
+   double            m_range_high;      // dealing range used for premium/discount
+   double            m_range_low;
+
    //--- true when bar `shift` is the highest/lowest of its neighbourhood
    bool              IsSwing(const double &high[], const double &low[], const int shift, const int total, const bool want_high) const
      {
@@ -43,9 +49,63 @@ private:
       return true;
      }
 
+   //--- Most recent swing that was already confirmed when bar `shift` closed.
+   //--- A swing needs m_fractal bars on its right to exist, so anything newer
+   //--- than shift + m_fractal was not knowable at the time and would be look-ahead.
+   double            ProtectedHigh(const int shift) const
+     {
+      for(int i = 0; i < ArraySize(m_highs); i++)
+         if(m_highs[i].shift > shift + m_fractal)
+            return m_highs[i].price;
+      return 0.0;
+     }
+
+   double            ProtectedLow(const int shift) const
+     {
+      for(int i = 0; i < ArraySize(m_lows); i++)
+         if(m_lows[i].shift > shift + m_fractal)
+            return m_lows[i].price;
+      return 0.0;
+     }
+
+   //--- replay the closes oldest to newest and label every break as BOS or CHoCH
+   void              BuildEvents(const double &close[], const int total)
+     {
+      m_last_event       = STRUCT_NONE;
+      m_last_event_time  = 0;
+      m_last_event_price = 0.0;
+
+      ENUM_BIAS trend = BIAS_NONE;
+
+      for(int i = total - 2; i >= 1; i--)
+        {
+         double hi = ProtectedHigh(i);
+         double lo = ProtectedLow(i);
+
+         //--- only the bar that first closes beyond the level counts as the break
+         if(hi > 0.0 && close[i] > hi && close[i + 1] <= hi)
+           {
+            m_last_event       = (trend == BIAS_BEAR ? STRUCT_CHOCH_BULL : STRUCT_BOS_BULL);
+            m_last_event_time  = iTime(m_symbol, m_tf, i);
+            m_last_event_price = hi;
+            trend              = BIAS_BULL;
+            continue;
+           }
+         if(lo > 0.0 && close[i] < lo && close[i + 1] >= lo)
+           {
+            m_last_event       = (trend == BIAS_BULL ? STRUCT_CHOCH_BEAR : STRUCT_BOS_BEAR);
+            m_last_event_time  = iTime(m_symbol, m_tf, i);
+            m_last_event_price = lo;
+            trend              = BIAS_BEAR;
+           }
+        }
+     }
+
 public:
                      CMarketStructure(void) : m_symbol(""), m_tf(PERIOD_H4), m_fractal(2), m_depth(300),
-                                              m_ema_handle(INVALID_HANDLE), m_atr_handle(INVALID_HANDLE), m_last_build(0) {}
+                                              m_ema_handle(INVALID_HANDLE), m_atr_handle(INVALID_HANDLE), m_last_build(0),
+                                              m_last_event(STRUCT_NONE), m_last_event_time(0), m_last_event_price(0.0),
+                                              m_range_high(0.0), m_range_low(0.0) {}
 
                     ~CMarketStructure(void) { Release(); }
 
@@ -80,12 +140,15 @@ public:
    //--- rebuild the swing arrays from the latest closed bars
    bool              Refresh(void)
      {
-      double high[], low[];
+      double high[], low[], close[];
       ArraySetAsSeries(high, true);
       ArraySetAsSeries(low, true);
+      ArraySetAsSeries(close, true);
 
       int total = CopyHigh(m_symbol, m_tf, 0, m_depth, high);
       if(total <= 0 || CopyLow(m_symbol, m_tf, 0, m_depth, low) != total)
+         return false;
+      if(CopyClose(m_symbol, m_tf, 0, m_depth, close) != total)
          return false;
 
       ArrayResize(m_highs, 0);
@@ -119,7 +182,15 @@ public:
         }
 
       m_last_build = iTime(m_symbol, m_tf, 0);
-      return (ArraySize(m_highs) >= 2 && ArraySize(m_lows) >= 2);
+      if(ArraySize(m_highs) < 2 || ArraySize(m_lows) < 2)
+         return false;
+
+      BuildEvents(close, total);
+
+      //--- the dealing range is the last completed swing leg
+      m_range_high = m_highs[0].price;
+      m_range_low  = m_lows[0].price;
+      return true;
      }
 
    int               SwingHighCount(void) const { return ArraySize(m_highs); }
@@ -158,6 +229,42 @@ public:
       if(CopyBuffer(m_ema_handle, 0, 0, 2, buf) < 2)
          return 0.0;
       return buf[1];
+     }
+
+   ENUM_STRUCT_EVENT LastEvent(void) const      { return m_last_event; }
+   datetime          LastEventTime(void) const  { return m_last_event_time; }
+   double            LastEventPrice(void) const { return m_last_event_price; }
+
+   //--- a break of structure or change of character closed within `bars` bars
+   bool              FreshEvent(const bool bullish, const int bars) const
+     {
+      if(m_last_event_time == 0)
+         return false;
+      bool matches = (bullish ? (m_last_event == STRUCT_BOS_BULL || m_last_event == STRUCT_CHOCH_BULL)
+                              : (m_last_event == STRUCT_BOS_BEAR || m_last_event == STRUCT_CHOCH_BEAR));
+      if(!matches)
+         return false;
+      int shift = iBarShift(m_symbol, m_tf, m_last_event_time, false);
+      return (shift >= 0 && shift <= bars);
+     }
+
+   double            RangeHigh(void) const { return m_range_high; }
+   double            RangeLow(void) const  { return m_range_low; }
+
+   double            Equilibrium(void) const
+     {
+      if(m_range_high <= m_range_low)
+         return 0.0;
+      return (m_range_high + m_range_low) * 0.5;
+     }
+
+   //--- premium above the midpoint of the dealing range, discount below it
+   ENUM_RANGE_ZONE   RangeZone(const double price) const
+     {
+      double eq = Equilibrium();
+      if(eq <= 0.0)
+         return RANGE_UNKNOWN;
+      return (price < eq ? RANGE_DISCOUNT : RANGE_PREMIUM);
      }
 
    //--- last closed bar broke the most recent opposing swing => break of structure
@@ -211,19 +318,30 @@ public:
          else             bear += 1;
         }
 
+      //--- the latest labelled break carries the most weight: a CHoCH means the
+      //--- old trend is over, so it outvotes the stale swing progression
+      switch(m_last_event)
+        {
+         case STRUCT_BOS_BULL:   bull += 1; break;
+         case STRUCT_BOS_BEAR:   bear += 1; break;
+         case STRUCT_CHOCH_BULL: bull += 2; break;
+         case STRUCT_CHOCH_BEAR: bear += 2; break;
+         default: break;
+        }
+
       int total = bull + bear;
       if(total == 0)
          return BIAS_NONE;
 
       if(bull > bear)
         {
-         strength = (double)bull / 4.0;
+         strength = (double)bull / 6.0;
          if(strength > 1.0) strength = 1.0;
          return BIAS_BULL;
         }
       if(bear > bull)
         {
-         strength = (double)bear / 4.0;
+         strength = (double)bear / 6.0;
          if(strength > 1.0) strength = 1.0;
          return BIAS_BEAR;
         }
@@ -264,6 +382,51 @@ public:
       double high1  = iHigh(m_symbol, m_tf, 1);
       double close1 = iClose(m_symbol, m_tf, 1);
       return (high1 > m_highs[0].price && close1 < m_highs[0].price);
+     }
+
+   //--- Liquidity was taken and rejected somewhere in the last `bars` closed bars.
+   //--- Bullish setups need sell side liquidity (a swing low) to have been swept.
+   bool              SweptWithin(const bool bullish, const int bars) const
+     {
+      int limit = MathMax(1, bars);
+      for(int i = 1; i <= limit; i++)
+        {
+         double close_i = iClose(m_symbol, m_tf, i);
+         if(bullish)
+           {
+            double lvl = ProtectedLow(i);
+            if(lvl > 0.0 && iLow(m_symbol, m_tf, i) < lvl && close_i > lvl)
+               return true;
+           }
+         else
+           {
+            double lvl = ProtectedHigh(i);
+            if(lvl > 0.0 && iHigh(m_symbol, m_tf, i) > lvl && close_i < lvl)
+               return true;
+           }
+        }
+      return false;
+     }
+
+   //--- momentum of the last closed bar relative to the EMA and its own body
+   bool              MomentumConfirms(const bool bullish) const
+     {
+      double open1  = iOpen(m_symbol, m_tf, 1);
+      double close1 = iClose(m_symbol, m_tf, 1);
+      double high1  = iHigh(m_symbol, m_tf, 1);
+      double low1   = iLow(m_symbol, m_tf, 1);
+      double range  = high1 - low1;
+      if(range <= 0.0)
+         return false;
+
+      double body = MathAbs(close1 - open1);
+      if(body / range < 0.4)      // indecisive candle
+         return false;
+
+      double ema = EMA();
+      if(bullish)
+         return (close1 > open1 && (ema <= 0.0 || close1 > ema));
+      return (close1 < open1 && (ema <= 0.0 || close1 < ema));
      }
   };
 

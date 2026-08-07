@@ -1,16 +1,23 @@
 # GoldSMC — multi timeframe gold expert advisor for MetaTrader 5
 
-An MT5 expert advisor for XAUUSD that reads the market top down and only trades
-where the higher timeframe, the intermediate timeframe and a fresh area of
-interest all agree:
+An institutional-style MT5 expert advisor for XAUUSD. It reads the market top
+down and only trades when the trend, the confirmation timeframe, a fresh area of
+interest and the execution trigger all agree:
 
 ```
-H4  -> structural bias (swings, break of structure, EMA)
-H1  -> must agree with the H4 bias, otherwise stand aside
-M15 -> entry at an unmitigated demand / supply zone or fair value gap
-        + candle or micro structure confirmation
-        + structural stop, fixed 1:4 take profit, risk based lot size
+H4  -> primary trend: market structure, swings, BOS, CHoCH
+H1  -> confirms H4 + liquidity + premium / discount
+M15 -> setup detection: liquidity sweep, BOS/CHoCH, order block / FVG /
+        mitigation block -> the zone is stored and armed
+M5  -> execution only: price must retrace into the stored zone, print a fresh
+        BOS/CHoCH, confirm momentum and pass the spread / volatility gates
+        -> structural stop, fixed 1:4 take profit, tiered risk lot size
 ```
+
+Entries are **never** taken directly from H1 or M15. Every gate has to pass,
+there is at most one open position, and there is no averaging, martingale or
+grid logic anywhere in the code. All structural decisions are taken on closed
+bars, so there is no repainting and no look-ahead bias.
 
 An optional Python service supplies the "market intelligence" layer: a neural
 directional model, news / social sentiment and an economic calendar blackout.
@@ -38,7 +45,8 @@ trades, never invent them.
 3. Copy `MQL5/Include/GoldSMC` into `MQL5/Include/`.
 4. Copy `MQL5/Scripts/GoldSMC` into `MQL5/Scripts/` (optional, for exporting history).
 5. In MetaEditor press **F7** on `GoldSMC_EA.mq5` — it must compile with 0 errors.
-6. Attach the EA to an **XAUUSD M15** chart and enable **Algo Trading**.
+6. Attach the EA to an **XAUUSD M5** chart (the execution timeframe) and enable
+   **Algo Trading**. The EA pulls H4, H1 and M15 data itself.
 
 The EA finds your broker's gold symbol automatically even when it carries a
 suffix (`XAUUSD.m`, `XAUUSDpro`, `GOLD#`, …). Set `InpSymbolOverride` if you
@@ -49,25 +57,34 @@ account the terminal is logged into. Test on a demo account first.
 
 ---
 
-## Risk defaults, and the honest version of the brief
+## Risk profiles and account protection
 
-The defaults ship conservative on purpose:
+`InpRiskProfile` picks a ladder of per-trade risk that steps **down** as the
+balance grows; every band and percentage is configurable, and risk compounds off
+`min(balance, equity)`.
 
-| Setting | Default | Why |
-| --- | --- | --- |
-| `InpRiskPercent` | 1.0 % | survives a normal losing streak |
-| `InpMaxRiskPercent` | 5.0 % | hard ceiling; the sizing code refuses anything above it |
-| `InpDailyLossPercent` | 3 % | stops for the rest of the day |
-| `InpMaxDrawdownPercent` | 15 % | halts the EA until you restart it |
-| `InpMaxTradesPerDay` | 3 | keeps the EA selective |
-| `InpMaxLossesPerDay` | 2 | ends the day after two stop-outs |
+| Balance band | Conservative | **Balanced (default)** | Aggressive |
+| --- | --- | --- | --- |
+| up to $250 | 2.0 % | **10 %** | 25 % |
+| $250 – $500 | 1.5 % | **7 %** | 15 % |
+| $500 – $1,000 | 1.0 % | **5 %** | 10 % |
+| above $1,000 | 0.75 % | **2.5 %** | 5 % |
 
-**About 30 % risk per trade.** The input allows it (raise `InpMaxRiskPercent`
-first), but three consecutive losers at 30 % leave 34 % of the account. Even a
-system that truly won 90 % of the time hits three losses in a row roughly once
-every thousand trades — and no gold strategy wins 90 % of the time. At a 1:4
-reward ratio this system only needs to win about **1 trade in 4** to break even,
-so the edge comes from the payoff, not from the hit rate.
+| Protection | Default |
+| --- | --- |
+| `InpMaxRiskPercent` (hard ceiling) | 12 % |
+| `InpDailyProfitTarget` | 500 — flattens, cancels pendings, resumes next day |
+| `InpDailyLossPercent` | 10 % |
+| `InpMaxDrawdownPercent` | 25 % (hard halt until restart) |
+| `InpMaxPositions` | 1 |
+| `InpMaxTradesPerDay` / `InpMaxLossesPerDay` / `InpMaxConsecutiveLoss` | 5 / 3 / 3 |
+
+**About the Aggressive preset.** It is exactly the requested 25/15/10/5 table
+and it is one dropdown away, but three consecutive losers at 25 % leave 42 % of
+the account — and `InpMaxDrawdownPercent` will halt the EA before compounding
+ever gets going. At 1:4 the system only needs to win about **1 trade in 4** to
+break even, so the edge comes from the payoff, not from the size of the bet.
+See [`docs/RISK.md`](docs/RISK.md) for the full arithmetic.
 
 **About "profitable 9/10 trades".** No code can promise that, and any product
 that does is lying. What the EA does instead: it refuses low quality setups

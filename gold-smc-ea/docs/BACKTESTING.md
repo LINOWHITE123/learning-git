@@ -5,16 +5,19 @@
 Gold spreads and swaps vary a lot between brokers, and a backtest on the wrong
 symbol is worthless. In the terminal you will actually trade on:
 
-1. open an **XAUUSD M15** chart and scroll back several years so the terminal
-   downloads history;
+1. open **XAUUSD M5, M15, H1 and H4** charts and scroll back several years so the
+   terminal downloads every timeframe the EA reads;
 2. **Tools → Options → Charts → Max bars in chart:** `Unlimited`.
+
+If the M5 history is missing the EA simply never executes, and if H4/H1/M15 are
+missing it never arms a setup — the dashboard status line says which one.
 
 ## 2. Strategy Tester settings
 
 | Setting | Value |
 | --- | --- |
 | Symbol | your broker's XAUUSD |
-| Period | M15 |
+| Period | **M5** (the execution timeframe) |
 | Model | **Every tick based on real ticks** (falls back to *Every tick* if real ticks are unavailable) |
 | Deposit | the size you will actually trade |
 | Leverage | your live leverage |
@@ -39,14 +42,25 @@ Optimise a few at a time, never all at once:
 
 | Group | Inputs |
 | --- | --- |
-| Structure | `InpFractalSize`, `InpMinHtfStrength`, `InpBiasEmaPeriod` |
+| Structure | `InpFractalSize`, `InpMinTrendStrength`, `InpBiasEmaPeriod` |
 | Zones | `InpImpulseAtr`, `InpZoneProximityAtr`, `InpMaxZoneTouches`, `InpUseFvg` |
-| Entry | `InpConfirm` |
+| Setup | `InpSweepLookback`, `InpStructureLookback`, `InpSetupExpiryBars`, `InpRequireDiscount` |
+| Execution | `InpExecEventBars`, `InpRequireExecMomentum`, `InpMinCandleAtr` |
 | Stops | `InpStopBufferAtr`, `InpMinStopAtr`, `InpMaxStopAtr` |
 | Targets | `InpRewardRatio` (try 2, 3, 4, 5) |
 
-Leave the risk inputs alone during optimisation — optimise the *edge* at a fixed
-1 % risk, then decide the size afterwards.
+Leave the risk inputs alone during optimisation — optimise the *edge* with
+`InpRiskProfile = RISK_CONSERVATIVE`, then decide the size afterwards. Comparing
+Balanced against Aggressive is a separate run on the *same* settings: the trade
+list should be identical and only the equity curve should differ.
+
+Relaxing the entry chain is the right lever when a run takes too few trades:
+`InpRequireSweep = false`, a larger `InpStructureLookback` / `InpExecEventBars`,
+or `InpRequireDiscount = false` — in roughly that order of harmlessness.
+
+Set `InpDailyProfitTarget = 0` for research runs: the default 500 stands the EA
+down for the rest of the day as soon as it is hit, which is correct live but
+truncates a backtest's sample.
 
 ## 5. Reading the result honestly
 
@@ -75,10 +89,10 @@ Sizing is fully automatic: risk is a percentage, so the same settings work on a
 $500 account and a $50,000 one. Two practical limits:
 
 * on a small account the broker's minimum lot (usually 0.01) can already exceed
-  1 % risk on a wide gold stop — the EA then **skips** the trade rather than
-  over-risking. Raise `InpRiskPercent` slightly or trade a cent account;
+  the tier risk on a wide gold stop — the EA then **skips** the trade rather than
+  over-risking. Move up a risk profile or trade a cent account;
 * `InpMaxRiskPercent` is a hard ceiling the sizing code will not cross, whatever
-  `InpRiskPercent` says.
+  the tiers say.
 
 ## 8. Other symbols
 

@@ -2,6 +2,10 @@
 //|                                                  RiskManager.mqh |
 //|   Position sizing, exposure limits and the account protection     |
 //|   rules that keep a losing streak from ending the account.        |
+//|                                                                   |
+//|   Risk per trade is a function of account size: the smaller the    |
+//|   balance the larger the percentage, stepping down automatically   |
+//|   as the account grows. Everything compounds off live equity.      |
 //+------------------------------------------------------------------+
 #ifndef __GOLDSMC_RISK_MQH__
 #define __GOLDSMC_RISK_MQH__
@@ -14,21 +18,41 @@ private:
    string            m_symbol;
    long              m_magic;
 
-   double            m_risk_percent;        // nominal risk per trade
+   //--- balance tiered risk
+   ENUM_RISK_PROFILE m_profile;
+   double            m_tier1_balance;       // upper bound of the smallest band
+   double            m_tier2_balance;
+   double            m_tier3_balance;
+   double            m_risk_tier1;          // risk % used inside each band
+   double            m_risk_tier2;
+   double            m_risk_tier3;
+   double            m_risk_tier4;          // above tier3_balance
    double            m_max_risk_percent;    // hard ceiling, whatever the inputs say
+   double            m_manual_lots;         // > 0 disables auto sizing
+
+   //--- protection limits
    double            m_daily_loss_percent;  // stop trading for the day beyond this
    double            m_max_dd_percent;      // stop trading entirely beyond this
    int               m_max_positions;
    int               m_max_trades_per_day;
-   double            m_min_lot_override;
+   int               m_max_losses_per_day;
+   int               m_max_consecutive_losses;
+   double            m_daily_profit_target; // account currency, 0 disables
 
+   //--- daily state
    double            m_day_start_equity;
    double            m_peak_equity;
    datetime          m_day_stamp;
    int               m_trades_today;
    int               m_losses_today;
+   int               m_consecutive_losses;
+   bool              m_target_hit;
    bool              m_halted;
    string            m_halt_reason;
+
+   //--- lifetime stats for the dashboard
+   int               m_wins_total;
+   int               m_losses_total;
 
    datetime          DayStart(const datetime t) const
      {
@@ -40,44 +64,170 @@ private:
       return StructToTime(dt);
      }
 
-public:
-                     CRiskManager(void) : m_symbol(""), m_magic(0), m_risk_percent(1.0), m_max_risk_percent(5.0),
-                                          m_daily_loss_percent(3.0), m_max_dd_percent(15.0), m_max_positions(1),
-                                          m_max_trades_per_day(5), m_min_lot_override(0.0), m_day_start_equity(0.0),
-                                          m_peak_equity(0.0), m_day_stamp(0), m_trades_today(0), m_losses_today(0),
-                                          m_halted(false), m_halt_reason("") {}
-
-   void              Init(const string symbol, const long magic, const double risk_percent, const double max_risk_percent,
-                          const double daily_loss_percent, const double max_dd_percent, const int max_positions,
-                          const int max_trades_per_day)
+   //--- preset ladders; Custom keeps whatever the inputs supplied
+   void              ApplyProfile(void)
      {
-      m_symbol             = symbol;
-      m_magic              = magic;
-      m_max_risk_percent   = MathMax(0.01, max_risk_percent);
-      m_risk_percent       = MathMin(MathMax(0.01, risk_percent), m_max_risk_percent);
-      m_daily_loss_percent = MathMax(0.1, daily_loss_percent);
-      m_max_dd_percent     = MathMax(1.0, max_dd_percent);
-      m_max_positions      = MathMax(1, max_positions);
-      m_max_trades_per_day = MathMax(1, max_trades_per_day);
+      switch(m_profile)
+        {
+         case RISK_CONSERVATIVE:
+            m_risk_tier1 = 2.0;  m_risk_tier2 = 1.5;  m_risk_tier3 = 1.0;  m_risk_tier4 = 0.75;
+            break;
+         case RISK_BALANCED:
+            m_risk_tier1 = 10.0; m_risk_tier2 = 7.0;  m_risk_tier3 = 5.0;  m_risk_tier4 = 2.5;
+            break;
+         case RISK_AGGRESSIVE:
+            m_risk_tier1 = 25.0; m_risk_tier2 = 15.0; m_risk_tier3 = 10.0; m_risk_tier4 = 5.0;
+            break;
+         default:
+            break;   // RISK_CUSTOM: leave the explicit inputs untouched
+        }
+     }
 
+public:
+                     CRiskManager(void) : m_symbol(""), m_magic(0),
+                                          m_profile(RISK_BALANCED),
+                                          m_tier1_balance(250.0), m_tier2_balance(500.0), m_tier3_balance(1000.0),
+                                          m_risk_tier1(10.0), m_risk_tier2(7.0), m_risk_tier3(5.0), m_risk_tier4(2.5),
+                                          m_max_risk_percent(10.0), m_manual_lots(0.0),
+                                          m_daily_loss_percent(10.0), m_max_dd_percent(25.0), m_max_positions(1),
+                                          m_max_trades_per_day(5), m_max_losses_per_day(2), m_max_consecutive_losses(3),
+                                          m_daily_profit_target(0.0),
+                                          m_day_start_equity(0.0), m_peak_equity(0.0), m_day_stamp(0),
+                                          m_trades_today(0), m_losses_today(0), m_consecutive_losses(0),
+                                          m_target_hit(false), m_halted(false), m_halt_reason(""),
+                                          m_wins_total(0), m_losses_total(0) {}
+
+   void              Init(const string symbol, const long magic)
+     {
+      m_symbol = symbol;
+      m_magic  = magic;
+      ResetState();
+     }
+
+   //--- balance tiered sizing configuration
+   void              ConfigureRisk(const ENUM_RISK_PROFILE profile,
+                                   const double tier1_balance, const double tier2_balance, const double tier3_balance,
+                                   const double risk1, const double risk2, const double risk3, const double risk4,
+                                   const double max_risk_percent, const double manual_lots)
+     {
+      m_profile          = profile;
+      m_tier1_balance    = MathMax(1.0, tier1_balance);
+      m_tier2_balance    = MathMax(m_tier1_balance, tier2_balance);
+      m_tier3_balance    = MathMax(m_tier2_balance, tier3_balance);
+      m_risk_tier1       = MathMax(0.01, risk1);
+      m_risk_tier2       = MathMax(0.01, risk2);
+      m_risk_tier3       = MathMax(0.01, risk3);
+      m_risk_tier4       = MathMax(0.01, risk4);
+      m_max_risk_percent = MathMax(0.01, max_risk_percent);
+      m_manual_lots      = MathMax(0.0, manual_lots);
+      ApplyProfile();
+     }
+
+   void              ConfigureLimits(const double daily_loss_percent, const double max_dd_percent,
+                                     const int max_positions, const int max_trades_per_day,
+                                     const int max_losses_per_day, const int max_consecutive_losses,
+                                     const double daily_profit_target)
+     {
+      m_daily_loss_percent     = MathMax(0.1, daily_loss_percent);
+      m_max_dd_percent         = MathMax(1.0, max_dd_percent);
+      m_max_positions          = MathMax(1, max_positions);
+      m_max_trades_per_day     = MathMax(1, max_trades_per_day);
+      m_max_losses_per_day     = MathMax(1, max_losses_per_day);
+      m_max_consecutive_losses = MathMax(1, max_consecutive_losses);
+      m_daily_profit_target    = MathMax(0.0, daily_profit_target);
+     }
+
+   void              ResetState(void)
+     {
       double eq            = AccountInfoDouble(ACCOUNT_EQUITY);
       m_day_start_equity   = eq;
       m_peak_equity        = eq;
       m_day_stamp          = DayStart(TimeCurrent());
       m_trades_today       = 0;
       m_losses_today       = 0;
+      m_consecutive_losses = 0;
+      m_target_hit         = false;
       m_halted             = false;
       m_halt_reason        = "";
      }
 
-   double            RiskPercent(void) const { return m_risk_percent; }
-   bool              Halted(void) const      { return m_halted; }
-   string            HaltReason(void) const  { return m_halt_reason; }
-   int               TradesToday(void) const { return m_trades_today; }
+   //--- risk percentage for the current account size
+   double            RiskPercent(void) const
+     {
+      double base = MathMin(AccountInfoDouble(ACCOUNT_BALANCE), AccountInfoDouble(ACCOUNT_EQUITY));
+      double pct;
+      if(base < m_tier1_balance)      pct = m_risk_tier1;
+      else if(base < m_tier2_balance) pct = m_risk_tier2;
+      else if(base < m_tier3_balance) pct = m_risk_tier3;
+      else                            pct = m_risk_tier4;
+      return MathMin(pct, m_max_risk_percent);
+     }
 
-   void              RegisterTrade(void)     { m_trades_today++; }
-   void              RegisterLoss(void)      { m_losses_today++; }
-   int               LossesToday(void) const { return m_losses_today; }
+   ENUM_RISK_PROFILE Profile(void) const            { return m_profile; }
+   bool              Halted(void) const             { return m_halted; }
+   string            HaltReason(void) const         { return m_halt_reason; }
+   int               TradesToday(void) const        { return m_trades_today; }
+   int               LossesToday(void) const        { return m_losses_today; }
+   int               ConsecutiveLosses(void) const  { return m_consecutive_losses; }
+   bool              TargetHit(void) const          { return m_target_hit; }
+   double            DailyTarget(void) const        { return m_daily_profit_target; }
+   double            ManualLots(void) const         { return m_manual_lots; }
+
+   void              RegisterTrade(void)            { m_trades_today++; }
+
+   //--- feed every closed deal here so streak protection stays accurate
+   void              RegisterResult(const double profit)
+     {
+      if(profit < 0.0)
+        {
+         m_losses_today++;
+         m_losses_total++;
+         m_consecutive_losses++;
+        }
+      else
+        {
+         m_wins_total++;
+         m_consecutive_losses = 0;
+        }
+     }
+
+   double            WinRate(void) const
+     {
+      int total = m_wins_total + m_losses_total;
+      if(total <= 0)
+         return 0.0;
+      return (double)m_wins_total / (double)total * 100.0;
+     }
+
+   //--- realised + floating profit since the day rolled over
+   double            DailyProfit(void) const
+     {
+      if(m_day_start_equity <= 0.0)
+         return 0.0;
+      return AccountInfoDouble(ACCOUNT_EQUITY) - m_day_start_equity;
+     }
+
+   double            RemainingTarget(void) const
+     {
+      if(m_daily_profit_target <= 0.0)
+         return 0.0;
+      return MathMax(0.0, m_daily_profit_target - DailyProfit());
+     }
+
+   //--- true the moment the daily target is reached; the EA then flattens
+   bool              CheckDailyTarget(void)
+     {
+      if(m_daily_profit_target <= 0.0 || m_target_hit)
+         return false;
+      if(DailyProfit() >= m_daily_profit_target)
+        {
+         m_target_hit  = true;
+         m_halted      = true;
+         m_halt_reason = "daily profit target";
+         return true;
+        }
+      return false;
+     }
 
    //--- call once per tick: rolls the daily counters and refreshes the equity peak
    void              Update(void)
@@ -89,8 +239,10 @@ public:
          m_day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
          m_trades_today     = 0;
          m_losses_today     = 0;
-         //--- a daily stop is released with the new session, a drawdown halt is not
-         if(m_halt_reason == "daily loss limit")
+         m_target_hit       = false;
+         m_consecutive_losses = 0;
+         //--- daily stops are released with the new session, a drawdown halt is not
+         if(m_halt_reason != "max drawdown")
            {
             m_halted      = false;
             m_halt_reason = "";
@@ -163,6 +315,20 @@ public:
          reason        = "daily loss limit reached";
          return false;
         }
+      if(m_consecutive_losses >= m_max_consecutive_losses)
+        {
+         m_halted      = true;
+         m_halt_reason = "consecutive losses";
+         reason        = "max consecutive losses reached";
+         return false;
+        }
+      if(m_losses_today >= m_max_losses_per_day)
+        {
+         m_halted      = true;
+         m_halt_reason = "daily loss count";
+         reason        = "max losses per day reached";
+         return false;
+        }
       if(OpenPositions() >= m_max_positions)
         {
          reason = "max concurrent positions";
@@ -213,19 +379,25 @@ public:
       if(stop_distance <= 0.0)
          return 0.0;
 
-      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-      double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-      double base    = MathMin(balance, equity);
-
-      double pct     = m_risk_percent * MathMin(1.0, MathMax(0.1, confidence_factor));
-      risk_money     = base * pct / 100.0;
-
       double per_lot = LossPerLot(stop_distance);
       if(per_lot <= 0.0)
          return 0.0;
 
-      double lots = risk_money / per_lot;
-      lots        = NormalizeLots(lots);
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      double base    = MathMin(balance, equity);
+
+      double lots;
+      if(m_manual_lots > 0.0)
+        {
+         lots = NormalizeLots(m_manual_lots);
+        }
+      else
+        {
+         //--- compounding: the percentage always applies to the live account size
+         double pct = RiskPercent() * MathMin(1.0, MathMax(0.1, confidence_factor));
+         lots       = NormalizeLots(base * pct / 100.0 / per_lot);
+        }
 
       //--- never let the rounded-up minimum lot exceed the hard risk ceiling
       double actual_risk = lots * per_lot;
