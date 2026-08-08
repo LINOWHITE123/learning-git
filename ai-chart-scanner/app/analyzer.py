@@ -2,11 +2,14 @@ import re
 
 from .config import min_risk_reward
 from .models import (
+    NOT_VISIBLE,
     Bias,
+    ChartRead,
     ConfidenceBand,
     ScanResult,
     Signal,
     TradeSetup,
+    Trend,
 )
 from .prompt import build_system_prompt, build_user_prompt
 from .providers import ChartImage, VisionProvider
@@ -28,6 +31,8 @@ UNIT_MINUTES = {
     "w": 10080, "week": 10080,
 }
 MT5_CODES = {"1": 1, "5": 5, "15": 15, "30": 30, "60": 60, "240": 240}
+HEADLINE_FIELDS = ("trend", "momentum", "volatility", "structure", "liquidity")
+TREND_TO_BIAS = {Trend.UP: Bias.BULLISH, Trend.DOWN: Bias.BEARISH, Trend.SIDEWAYS: Bias.RANGING}
 
 
 def normalize_timeframe(raw: str) -> str:
@@ -97,6 +102,48 @@ def levels_consistent(signal: Signal, setup: TradeSetup) -> bool:
     return True
 
 
+def chart_bias(chart: ChartRead) -> Bias:
+    """A chart's directional read, falling back to its trend when `bias` was left unknown."""
+    if chart.bias is not Bias.UNKNOWN:
+        return chart.bias
+    return TREND_TO_BIAS.get(chart.trend, Bias.UNKNOWN)
+
+
+def entry_chart(result: ScanResult) -> ChartRead | None:
+    """The lowest uploaded timeframe - the one the entry is taken on."""
+    if not result.charts:
+        return None
+    ranked = [chart for chart in result.charts if timeframe_minutes(chart.timeframe)]
+    if not ranked:
+        return result.charts[-1]
+    return min(ranked, key=lambda chart: timeframe_minutes(chart.timeframe))
+
+
+def fill_from_charts(result: ScanResult) -> None:
+    """Models routinely fill the per-image reads but leave the headline fields blank; mirror them up."""
+    entry = entry_chart(result)
+    if entry is None:
+        return
+
+    if not result.symbol or result.symbol == NOT_VISIBLE:
+        readable = [chart.symbol for chart in result.charts if chart.symbol and chart.symbol != NOT_VISIBLE]
+        if readable:
+            result.symbol = readable[0]
+    if not timeframe_minutes(result.primary_timeframe) and timeframe_minutes(entry.timeframe):
+        result.primary_timeframe = entry.timeframe
+
+    for field in HEADLINE_FIELDS:
+        if getattr(result, field).value == "unknown":
+            setattr(result, field, getattr(entry, field))
+    if result.sentiment is Bias.UNKNOWN:
+        result.sentiment = chart_bias(entry)
+
+
+def _warns_about(result: ScanResult, keyword: str) -> bool:
+    """The model usually writes its own version of these warnings; don't add a near-duplicate."""
+    return any(keyword in warning.lower() for warning in result.warnings)
+
+
 def _wait(result: ScanResult, reason: str) -> None:
     result.signal = Signal.WAIT
     if reason not in result.warnings:
@@ -164,22 +211,23 @@ def enforce_rules(result: ScanResult, min_rr: float | None = None) -> ScanResult
     if result.confidence < MIN_CONFIDENCE and result.signal is not Signal.WAIT:
         _wait(result, f"Confidence {result.confidence}% is below the {MIN_CONFIDENCE}% minimum.")
 
+    fill_from_charts(result)
     check_alignment(result)
     check_coverage(result)
 
     result.confidence_band = confidence_band(result.confidence)
     result.factors.risk_reward = bool(setup and setup.risk_reward and setup.risk_reward >= threshold)
     result.timeframes_analyzed = list(result.alignment.keys())
-    result.primary_timeframe = normalize_timeframe(result.primary_timeframe) or (
-        result.timeframes_analyzed[-1] if result.timeframes_analyzed else result.primary_timeframe
-    )
+    if timeframe_minutes(result.primary_timeframe):
+        result.primary_timeframe = normalize_timeframe(result.primary_timeframe)
+    elif result.timeframes_analyzed:
+        result.primary_timeframe = result.timeframes_analyzed[-1]
 
-    if setup is not None and setup.levels_approximate and APPROXIMATE_WARNING not in result.warnings:
+    if setup is not None and setup.levels_approximate and not _warns_about(result, "approximate"):
         result.warnings.append(APPROXIMATE_WARNING)
-    if NO_NEWS_WARNING not in result.warnings:
+    if not _warns_about(result, "news"):
         result.warnings.append(NO_NEWS_WARNING)
-    if result.signal is Signal.WAIT:
-        result.setup = setup if setup is not None else None
+    result.warnings = list(dict.fromkeys(result.warnings))
     return result
 
 
@@ -213,5 +261,5 @@ def scan_charts(
             chart.source = image.filename
         chart.timeframe = normalize_timeframe(chart.timeframe) or image.timeframe or chart.timeframe
     if not result.alignment:
-        result.alignment = {chart.timeframe: chart.bias for chart in result.charts if chart.timeframe}
+        result.alignment = {chart.timeframe: chart_bias(chart) for chart in result.charts if chart.timeframe}
     return enforce_rules(result)

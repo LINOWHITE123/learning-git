@@ -13,8 +13,9 @@ HARD RULES
 
 STEP 1 - IMAGE QUALITY
 For every screenshot fill `quality`: is the symbol visible, the timeframe visible, the price scale visible, the
-candles visible. If the image is too blurry / too small / cropped to be read, set `quality.usable` to false and add
-the reason to `quality.issues`.
+candles visible. These flags must match what you actually read - if you report the symbol, `symbol_visible` is true.
+If the image is too blurry / too small / cropped to be read, set `quality.usable` to false and add the reason to
+`quality.issues`.
 
 STEP 2 - PER-CHART READ (one `charts[]` entry per screenshot, same order as given)
 Detect the timeframe from the chart itself (label such as H4/240, H1/60, M15/15). Report symbol, current price,
@@ -24,6 +25,9 @@ lows, support/resistance, demand/supply zones, order blocks, fair value gaps, br
 (previous highs/lows, equal highs/lows, session highs/lows if visible) and whether a buy-side or sell-side liquidity
 sweep is visible, plus visible indicators only (moving averages, RSI, MACD) and any chart patterns and recent
 price action.
+Whenever the price scale is readable, `support` and `resistance` must not be empty: give at least the nearest level
+below and the nearest level above the current price, each as {{"label": ..., "low": number, "high": number or null}}.
+Leave a list empty only when the chart genuinely does not show it - not to save effort.
 
 STEP 3 - MULTI-TIMEFRAME ALIGNMENT
 Fill `alignment` with one entry per detected timeframe, e.g. {{"H4": "bullish", "H1": "bullish", "M15": "bullish"}}.
@@ -38,8 +42,12 @@ If a setup is justified by the visible evidence, produce entry, stop_loss, take_
 invalidation level (the price that kills the idea), all calculated from this chart - never copied from an example.
 For a long: stop_loss < entry < take_profit_1 <= take_profit_2.
 For a short: stop_loss > entry > take_profit_1 >= take_profit_2.
-Prefer at least {min_rr}:1 risk:reward measured from entry to take_profit_1. If no such setup exists, signal "wait"
-and omit `setup`.
+Before returning, compute the reward-to-risk yourself:
+  abs(take_profit_1 - entry) / abs(entry - stop_loss)
+It must be at least {min_rr}. If it is lower, either move take_profit_1 to the next visible structural target, or
+tighten the stop to the level that actually invalidates the idea, or - if neither is justified by the chart - set
+signal "wait" and omit `setup`. Do not report a setup whose reward-to-risk is below {min_rr}.
+`setup` must be a JSON object or omitted entirely; never the string "wait".
 
 STEP 5 - CONFIDENCE
 Score 0-100 from the visible confluence and mark which factors were actually present in `factors`: higher timeframe
@@ -50,6 +58,41 @@ STEP 6 - SUMMARY AND WARNINGS
 `summary` is 2-4 sentences explaining only what is visible and why the setup is favoured, and what would invalidate
 it. Add a `warnings` entry for every limitation that applies, e.g. missing higher timeframes, approximate levels
 because of low resolution, unreadable indicator values, no news data available from a screenshot.
+
+HEADLINE FIELDS
+Also fill the top-level `symbol`, `primary_timeframe`, `trend`, `momentum`, `volatility`, `structure`, `liquidity`
+and `sentiment` for the entry timeframe. If you read them on a chart, do not leave them "unknown" at the top level.
+
+SHAPE - return exactly these keys, filling every one for every screenshot:
+{{
+  "symbol": "XAUUSD", "primary_timeframe": "M15", "signal": "long|short|wait", "confidence": 0-100,
+  "trend": "up|down|sideways|unknown", "momentum": "bullish|bearish|ranging|unknown",
+  "volatility": "low|medium|high|unknown", "structure": "bullish|bearish|ranging|unknown",
+  "liquidity": "buy_side_sweep|sell_side_sweep|none|unknown", "sentiment": "bullish|bearish|ranging|unknown",
+  "alignment": {{"H4": "bullish", "H1": "bullish", "M15": "bullish"}}, "alignment_note": "...",
+  "setup": {{"entry": 0, "entry_note": "...", "stop_loss": 0, "take_profit_1": 0, "take_profit_2": 0,
+             "invalidation": 0, "invalidation_note": "...", "levels_approximate": true}},
+  "factors": {{"htf_trend": false, "ltf_structure": false, "bos_or_choch": false, "liquidity_sweep": false,
+               "support_resistance": false, "order_block": false, "fair_value_gap": false, "momentum": false,
+               "chart_pattern": false, "risk_reward": false}},
+  "summary": "...", "warnings": ["..."],
+  "charts": [{{
+    "timeframe": "H4", "symbol": "XAUUSD", "current_price": 0, "price_levels_approximate": true,
+    "bias": "bullish|bearish|ranging|unknown", "trend": "up|down|sideways|unknown",
+    "momentum": "bullish|bearish|ranging|unknown", "volatility": "low|medium|high|unknown",
+    "volume": "low|medium|high|unknown", "volume_note": "...",
+    "structure": "bullish|bearish|ranging|unknown", "structure_events": ["HH", "HL", "BOS"], "structure_note": "...",
+    "swing_highs": [0], "swing_lows": [0],
+    "support": [{{"label": "...", "low": 0, "high": 0}}], "resistance": [{{"label": "...", "low": 0, "high": 0}}],
+    "demand_zones": [], "supply_zones": [], "order_blocks": [], "fair_value_gaps": [],
+    "breakout_levels": [], "retest_levels": [],
+    "liquidity": "buy_side_sweep|sell_side_sweep|none|unknown", "liquidity_note": "...",
+    "indicators": ["..."], "moving_averages": "...", "rsi": "...", "macd": "...",
+    "patterns": ["..."], "price_action": "...",
+    "quality": {{"usable": true, "symbol_visible": true, "timeframe_visible": true, "price_scale_visible": true,
+                 "candles_visible": true, "issues": []}}
+  }}]
+}}
 
 Return ONLY the JSON object, no markdown fences and no commentary.
 """
