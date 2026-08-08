@@ -33,7 +33,6 @@ fetch("/api/health")
     providerLine.textContent = "";
   });
 
-drop.addEventListener("click", () => filesInput.click());
 ["dragenter", "dragover"].forEach((event) =>
   drop.addEventListener(event, (e) => {
     e.preventDefault();
@@ -118,14 +117,17 @@ function stopStages() {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   errorBox.hidden = true;
-  if (selected.length === 0) {
+  // Some mobile browsers never fire `change`, so fall back to whatever the input itself holds.
+  const files = selected.length ? selected : Array.from(filesInput.files || []).slice(0, maxImages);
+  if (files.length === 0) {
     showError("Choose at least one chart screenshot (PNG, JPG, JPEG, WebP or HEIC).");
     return;
   }
 
   const body = new FormData();
-  selected.forEach((file) => body.append("files", file));
-  body.append("timeframes", Array.from(thumbs.querySelectorAll("input")).map((i) => i.value.trim()).join(","));
+  files.forEach((file) => body.append("files", file));
+  const labels = Array.from(thumbs.querySelectorAll("input")).map((input) => input.value.trim());
+  body.append("timeframes", labels.length === files.length ? labels.join(",") : "");
   body.append("symbol", document.getElementById("symbol").value.trim());
   body.append("entry_timeframe", document.getElementById("entry-tf").value.trim() || "M15");
   body.append("notes", document.getElementById("notes").value.trim());

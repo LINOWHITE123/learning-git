@@ -38,6 +38,7 @@ form {
 .step + button { margin-top: 0; }
 
 .drop {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -49,6 +50,8 @@ form {
   text-align: center;
 }
 .drop.over { border-color: var(--green); background: #121b16; }
+/* Kept in the layout (not `hidden`) so mobile Safari reliably opens the picker from the label. */
+.file-input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .drop-title { font-weight: 600; }
 .drop-hint { color: var(--muted); font-size: 13px; }
 

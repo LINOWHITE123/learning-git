@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Chart Scanner</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=3" />
   </head>
   <body>
     <header>
@@ -17,7 +17,7 @@
       <form id="scan-form">
         <p class="step">Step 1 — Upload Chart Screenshot</p>
         <label class="drop" id="drop">
-          <input id="files" type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.heic,.heif" multiple hidden />
+          <input id="files" class="file-input" type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.heic,.heif" multiple />
           <span class="drop-title">Drop screenshots here</span>
           <span class="drop-hint">or click to choose — PNG, JPG, JPEG, WebP, HEIC (iPhone). Up to 3: H4, H1, M15.</span>
         </label>
@@ -41,6 +41,6 @@
       <section id="result" hidden></section>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=3"></script>
   </body>
 </html>
