@@ -67,3 +67,9 @@ cd ai-chart-scanner
 
 The confidence score is an analytical confluence score, not a probability of winning. Verify every level yourself —
 this is not financial advice.
+
+## Deploy to a public URL
+
+`render.yaml` is a Render blueprint. In Render: New → Blueprint → pick this repo,
+then paste `OPENAI_API_KEY` when prompted (it is not stored in the repo).
+The service starts with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
