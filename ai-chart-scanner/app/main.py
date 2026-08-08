@@ -8,12 +8,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from .analyzer import MIN_CONFIDENCE, scan_charts
-from .config import ALLOWED_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES, get_provider, min_risk_reward
+from .config import MAX_IMAGE_BYTES, MAX_IMAGES, get_provider, min_risk_reward
+from .images import SUPPORTED_LABEL, UnsupportedImage, prepare_image
 from .models import ScanResult
 from .providers import ChartImage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-FILES = File(..., description="Chart screenshots (PNG, JPG, JPEG or WebP)")
+FILES = File(..., description=f"Chart screenshots ({SUPPORTED_LABEL})")
 
 
 def provider_error(error: httpx.HTTPStatusError) -> str:
@@ -65,12 +66,6 @@ async def scan(
     images: list[ChartImage] = []
     for index, upload in enumerate(files):
         name = upload.filename or f"chart-{index + 1}"
-        media_type = upload.content_type or ""
-        if media_type not in ALLOWED_MEDIA_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{name}: unsupported type {media_type or 'unknown'}. Use PNG, JPG, JPEG or WebP.",
-            )
         data = await upload.read()
         if not data:
             raise HTTPException(status_code=400, detail=f"{name} is empty.")
@@ -79,6 +74,10 @@ async def scan(
                 status_code=413,
                 detail=f"{name} is larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MB.",
             )
+        try:
+            media_type, data = prepare_image(data)
+        except UnsupportedImage as error:
+            raise HTTPException(status_code=400, detail=f"{name}: {error}") from error
         images.append(
             ChartImage(
                 filename=name,

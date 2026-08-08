@@ -9,7 +9,7 @@ it only reads the images you upload.
 
 ## Flow
 
-1. **Upload** 1-3 screenshots (PNG, JPG, JPEG, WebP). Typically H4 + H1 + M15; the timeframe of each image is
+1. **Upload** 1-3 screenshots (PNG, JPG, JPEG, WebP, or iPhone HEIC — transcoded to PNG server-side). Typically H4 + H1 + M15; the timeframe of each image is
    detected from the chart itself (filename hints and manual labels are optional).
 2. **Scan chart** — the vision model returns a per-screenshot read plus one combined plan.
 3. **Result** — reference-style card with the signal, confluence factors, warnings, and a detail card per screenshot.

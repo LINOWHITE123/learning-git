@@ -3,9 +3,8 @@ import os
 from .providers import AnthropicVisionProvider, DemoProvider, OpenAIVisionProvider, VisionProvider
 
 DEFAULT_MIN_RR = 2.0
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_IMAGES = 3
-ALLOWED_MEDIA_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 
 def min_risk_reward() -> float:

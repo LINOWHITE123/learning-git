@@ -61,8 +61,19 @@ function guessTimeframe(name) {
   return `M${number}`;
 }
 
+const IMAGE_NAME = /\.(png|jpe?g|webp|heic|heif)$/i;
+
+function looksLikeImage(file) {
+  return file.type.startsWith("image/") || IMAGE_NAME.test(file.name || "");
+}
+
 function setFiles(files) {
-  selected = files.filter((file) => /image\/(png|jpeg|webp)/.test(file.type)).slice(0, maxImages);
+  const rejected = files.filter((file) => !looksLikeImage(file));
+  selected = files.filter(looksLikeImage).slice(0, maxImages);
+  errorBox.hidden = true;
+  if (rejected.length) {
+    showError(`Skipped ${rejected.map((file) => file.name).join(", ")} — not an image file.`);
+  }
   thumbs.innerHTML = "";
   selected.forEach((file) => {
     const wrapper = document.createElement("div");
@@ -70,6 +81,10 @@ function setFiles(files) {
     const img = document.createElement("img");
     img.src = URL.createObjectURL(file);
     img.alt = file.name;
+    // Browsers that cannot render HEIC still upload it fine, so show the name instead of a broken image.
+    img.addEventListener("error", () => {
+      img.replaceWith(Object.assign(document.createElement("span"), { className: "no-preview", textContent: file.name }));
+    });
     const label = document.createElement("input");
     label.type = "text";
     label.placeholder = "auto-detected";
@@ -104,7 +119,7 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   errorBox.hidden = true;
   if (selected.length === 0) {
-    showError("Choose at least one chart screenshot (PNG, JPG, JPEG or WebP).");
+    showError("Choose at least one chart screenshot (PNG, JPG, JPEG, WebP or HEIC).");
     return;
   }
 

@@ -1,8 +1,10 @@
 import io
 
 import httpx
+import pillow_heif
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.main import app, provider_error
 
@@ -65,6 +67,17 @@ def test_scan_accepts_jpeg_and_webp(client):
     for name, media_type in (("chart.jpg", "image/jpeg"), ("chart.webp", "image/webp")):
         response = client.post("/api/scan", files=[upload(name, media_type)])
         assert response.status_code == 200, response.text
+
+
+def test_scan_accepts_iphone_heic_reported_as_octet_stream(client):
+    """iOS uploads HEIC with an unhelpful content type, so the bytes must decide."""
+    buffer = io.BytesIO()
+    pillow_heif.from_pillow(Image.new("RGB", (8, 8), "white")).save(buffer, format="HEIF")
+    response = client.post(
+        "/api/scan",
+        files=[upload("IMG_4561.HEIC", "application/octet-stream", buffer.getvalue())],
+    )
+    assert response.status_code == 200, response.text
 
 
 def test_scan_rejects_non_image(client):
