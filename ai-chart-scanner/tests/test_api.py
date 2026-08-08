@@ -1,9 +1,10 @@
 import io
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, provider_error
 
 PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
@@ -79,3 +80,18 @@ def test_scan_rejects_empty_file(client):
 def test_scan_rejects_too_many_files(client):
     response = client.post("/api/scan", files=[upload(f"chart-{i}.png") for i in range(4)])
     assert response.status_code == 400
+
+
+def test_provider_error_extracts_provider_message():
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    response = httpx.Response(
+        429, json={"error": {"message": "You have no credits remaining.", "code": "credit_balance_exhausted"}}
+    )
+    error = httpx.HTTPStatusError("429", request=request, response=response)
+    assert provider_error(error) == "You have no credits remaining."
+
+
+def test_provider_error_falls_back_to_text():
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    error = httpx.HTTPStatusError("500", request=request, response=httpx.Response(500, text="upstream boom"))
+    assert provider_error(error) == "upstream boom"

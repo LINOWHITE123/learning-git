@@ -15,6 +15,19 @@ from .providers import ChartImage
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 FILES = File(..., description="Chart screenshots (PNG, JPG, JPEG or WebP)")
 
+
+def provider_error(error: httpx.HTTPStatusError) -> str:
+    """Surface the provider's own message (quota exhausted, bad key, rate limit) instead of a bare status code."""
+    try:
+        body = error.response.json()
+    except ValueError:
+        return error.response.text[:200] or "no details returned"
+    detail = body.get("error") if isinstance(body, dict) else None
+    if isinstance(detail, dict) and detail.get("message"):
+        return str(detail["message"])[:300]
+    return str(body)[:300]
+
+
 app = FastAPI(
     title="AI Chart Scanner",
     version="1.0.0",
@@ -91,7 +104,10 @@ async def scan(
     except httpx.HTTPStatusError as error:
         raise HTTPException(
             status_code=502,
-            detail=f"The vision model rejected the request ({error.response.status_code}).",
+            detail=(
+                f"The vision model rejected the request ({error.response.status_code}): "
+                f"{provider_error(error)}"
+            ),
         ) from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=504, detail=f"The vision model request failed: {error}") from error
